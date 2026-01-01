@@ -1,0 +1,14 @@
+Key Mapping
+Key	Note
+Z	C
+S	C#
+X	D
+D	D#
+C	E
+V	F
+G	F#
+B	G
+H	G#
+N	A
+J	A#
+M	B
