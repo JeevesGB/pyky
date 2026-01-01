@@ -55,7 +55,7 @@ sequencer = StepSequencer(STEPS)
 
 # ================= UI ROOT =================
 root = tk.Tk()
-root.title("PyKY — NES Tracker + Keyboard")
+root.title("PyKY — NES Tracker + Keyboard + ADSR")
 root.configure(bg="#1e1e1e")
 
 # ================= STATE =================
@@ -67,6 +67,12 @@ current_wave = tk.StringVar(value="pulse")
 current_duty = tk.DoubleVar(value=0.5)
 current_octave = tk.IntVar(value=0)
 live_mode = tk.BooleanVar(value=True)
+
+# ADSR values
+attack_var = tk.DoubleVar(value=0.01)
+decay_var = tk.DoubleVar(value=0.1)
+sustain_var = tk.DoubleVar(value=0.8)
+release_var = tk.DoubleVar(value=0.2)
 
 # ================= TOOLBAR =================
 toolbar = tk.Frame(root, bg="#222")
@@ -91,6 +97,7 @@ def export_wav_ui():
             wave=current_wave.get(),
             duty=current_duty.get(),
             octave=current_octave.get(),
+            adsr={"A":attack_var.get(),"D":decay_var.get(),"S":sustain_var.get(),"R":release_var.get()},
             filename=path
         )
         messagebox.showinfo("Exported", f"WAV exported:\n{path}")
@@ -189,6 +196,23 @@ tk.Spinbox(
     textvariable=current_octave
 ).grid(row=2, column=1)
 
+# ADSR sliders
+tk.Label(controls, text="Attack", fg="#ccc", bg="#1e1e1e").grid(row=3, column=0)
+tk.Scale(controls, from_=0, to=2, resolution=0.01, orient="horizontal",
+         variable=attack_var, bg="#1e1e1e", fg="#ccc").grid(row=3, column=1)
+
+tk.Label(controls, text="Decay", fg="#ccc", bg="#1e1e1e").grid(row=4, column=0)
+tk.Scale(controls, from_=0, to=2, resolution=0.01, orient="horizontal",
+         variable=decay_var, bg="#1e1e1e", fg="#ccc").grid(row=4, column=1)
+
+tk.Label(controls, text="Sustain", fg="#ccc", bg="#1e1e1e").grid(row=5, column=0)
+tk.Scale(controls, from_=0, to=1, resolution=0.01, orient="horizontal",
+         variable=sustain_var, bg="#1e1e1e", fg="#ccc").grid(row=5, column=1)
+
+tk.Label(controls, text="Release", fg="#ccc", bg="#1e1e1e").grid(row=6, column=0)
+tk.Scale(controls, from_=0, to=2, resolution=0.01, orient="horizontal",
+         variable=release_var, bg="#1e1e1e", fg="#ccc").grid(row=6, column=1)
+
 # ================= TRANSPORT =================
 transport = tk.Frame(main, bg="#1e1e1e")
 transport.pack(pady=6)
@@ -236,12 +260,14 @@ def sequencer_loop():
             for r in range(ROWS):
                 if sequencer.pattern[r][col]:
                     freq = note_to_freq_name(NOTE_NAMES[r] + str(current_octave.get() + 4))
+                    adsr = {"A": attack_var.get(), "D": decay_var.get(),
+                            "S": sustain_var.get(), "R": release_var.get()}
                     if current_wave.get() == "pulse":
-                        engine.voices.append(Pulse(freq, current_duty.get()))
+                        engine.voices.append(Pulse(freq, current_duty.get(), adsr=adsr))
                     elif current_wave.get() == "triangle":
-                        engine.voices.append(Triangle(freq))
+                        engine.voices.append(Triangle(freq, adsr=adsr))
                     else:
-                        engine.voices.append(Noise())
+                        engine.voices.append(Noise(adsr=adsr))
 
         last_col = col
         time.sleep(step_time)
@@ -256,22 +282,28 @@ def press_key(note_name):
     if note_name in active_notes:
         return
     freq = note_to_freq_name(note_name)
+    adsr = {"A": attack_var.get(), "D": decay_var.get(),
+            "S": sustain_var.get(), "R": release_var.get()}
     if current_wave.get() == "pulse":
-        voice = Pulse(freq, current_duty.get())
+        voice = Pulse(freq, current_duty.get(), adsr=adsr)
     elif current_wave.get() == "triangle":
-        voice = Triangle(freq)
+        voice = Triangle(freq, adsr=adsr)
     else:
-        voice = Noise()
+        voice = Noise(adsr=adsr)
     active_notes[note_name] = voice
     engine.voices.append(voice)
 
 def release_key(note_name):
     if note_name in active_notes:
         voice = active_notes.pop(note_name)
-        if voice in engine.voices:
-            engine.voices.remove(voice)
+        voice.release()
+        def remove_after_release(v):
+            while v.envelope(0) > 0:
+                time.sleep(0.01)
+            if v in engine.voices:
+                engine.voices.remove(v)
+        threading.Thread(target=remove_after_release, args=(voice,), daemon=True).start()
 
-# On-screen keyboard buttons
 for i, note in enumerate(KEYBOARD_NOTES):
     color = "white" if "#" not in note else "black"
     fg = "black" if color == "white" else "white"
@@ -290,15 +322,39 @@ for i, note in enumerate(KEYBOARD_NOTES):
     key_buttons.append(b)
 
 # ================= KEYBOARD SHORTCUTS =================
-def key_press(event):
-    if event.char in KEYBOARD_KEYS:
-        index = KEYBOARD_KEYS.index(event.char)
-        press_key(KEYBOARD_NOTES[index])
+def press_key(note_name):
+    # Only add if the note is not currently held
+    if note_name in active_notes:
+        return
 
-def key_release(event):
-    if event.char in KEYBOARD_KEYS:
-        index = KEYBOARD_KEYS.index(event.char)
-        release_key(KEYBOARD_NOTES[index])
+    freq = note_to_freq_name(note_name)
+    adsr = {"A": attack_var.get(), "D": decay_var.get(),
+            "S": sustain_var.get(), "R": release_var.get()}
+
+    if current_wave.get() == "pulse":
+        voice = Pulse(freq, current_duty.get(), adsr=adsr)
+    elif current_wave.get() == "triangle":
+        voice = Triangle(freq, adsr=adsr)
+    else:
+        voice = Noise(adsr=adsr)
+
+    active_notes[note_name] = voice
+    engine.voices.append(voice)
+
+
+def release_key(note_name):
+    if note_name in active_notes:
+        voice = active_notes.pop(note_name)
+        voice.release()
+
+        # Remove after release finishes
+        def remove_after_release(v):
+            while v.envelope(0) > 0:
+                time.sleep(0.01)
+            if v in engine.voices:
+                engine.voices.remove(v)
+        threading.Thread(target=remove_after_release, args=(voice,), daemon=True).start()
+
 
 root.bind("<KeyPress>", key_press)
 root.bind("<KeyRelease>", key_release)
@@ -306,7 +362,7 @@ root.bind("<KeyRelease>", key_release)
 # ================= FOOTER =================
 tk.Label(
     root,
-    text="PyKY NES Tracker + 25-Key Keyboard — Save patterns • Export WAV • Pulse/Triangle/Noise",
+    text="PyKY NES Tracker + 25-Key Keyboard + ADSR — Save patterns • Export WAV • Pulse/Triangle/Noise",
     fg="#777",
     bg="#1e1e1e"
 ).pack(pady=4)
@@ -320,24 +376,30 @@ def midi_listener():
             for msg in port:
                 if not live_mode.get():
                     continue
+                note_name = f"midi{msg.note}"
                 if msg.type == "note_on" and msg.velocity > 0:
-                    freq = 261.63 * (2 ** ((msg.note - 69) / 12))
-                    note_name = f"midi{msg.note}"
                     if note_name not in active_notes:
+                        freq = 261.63 * (2 ** ((msg.note - 69) / 12))
+                        adsr = {"A": attack_var.get(), "D": decay_var.get(),
+                                "S": sustain_var.get(), "R": release_var.get()}
                         if current_wave.get() == "pulse":
-                            voice = Pulse(freq, current_duty.get())
+                            voice = Pulse(freq, current_duty.get(), adsr=adsr)
                         elif current_wave.get() == "triangle":
-                            voice = Triangle(freq)
+                            voice = Triangle(freq, adsr=adsr)
                         else:
-                            voice = Noise()
+                            voice = Noise(adsr=adsr)
                         active_notes[note_name] = voice
                         engine.voices.append(voice)
                 elif msg.type in ("note_off", "note_on"):
-                    note_name = f"midi{msg.note}"
                     if note_name in active_notes:
                         voice = active_notes.pop(note_name)
-                        if voice in engine.voices:
-                            engine.voices.remove(voice)
+                        voice.release()
+                        def remove_after_release(v):
+                            while v.envelope(0) > 0:
+                                time.sleep(0.01)
+                            if v in engine.voices:
+                                engine.voices.remove(v)
+                        threading.Thread(target=remove_after_release, args=(voice,), daemon=True).start()
     except:
         pass
 
