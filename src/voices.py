@@ -1,14 +1,18 @@
 import math
+import random
 
 class Voice:
     def __init__(self, freq, sample_rate=44100, adsr=None):
         self.freq = freq
         self.sample_rate = sample_rate
-        self.phase = 0
+        self.phase = 0.0
         self.adsr = adsr or {"A":0.01,"D":0.1,"S":0.8,"R":0.2}
-        self.time = 0
+
+        # ADSR timers
+        self.time = 0.0            # Attack/Decay/Sustain timer
         self.releasing = False
-        self.release_start_amplitude = 1.0
+        self.release_time = 0.0    # Release timer
+        self.release_start_amplitude = 0.0
 
     def envelope(self, dt):
         A = self.adsr["A"]
@@ -16,32 +20,35 @@ class Voice:
         S = self.adsr["S"]
         R = self.adsr["R"]
 
-        t = self.time
-
         if self.releasing:
-            return max(0, self.release_start_amplitude * (1 - (t / R)))
+            self.release_time += dt
+            if R == 0:
+                return 0.0
+            return max(0.0, self.release_start_amplitude * (1 - self.release_time / R))
         else:
-            if t < A:
+            self.time += dt
+            t = self.time
+            if t < A:  # Attack
                 return t / A
-            elif t < A + D:
+            elif t < A + D:  # Decay
                 return 1 - (1 - S) * ((t - A)/D)
-            else:
+            else:  # Sustain
                 return S
 
     def release(self):
-        self.releasing = True
-        self.time = 0
-        self.release_start_amplitude = self.envelope(0)
+        if not self.releasing:
+            self.releasing = True
+            self.release_time = 0.0
+            self.release_start_amplitude = self.envelope(0)
 
     def sample(self, dt):
-        self.time += dt
         amp = self.envelope(dt)
         return self._wave(dt) * amp
 
     def _wave(self, dt):
-        # override in Pulse / Triangle / Noise
-        return 0
+        return 0.0  # Override in subclasses
 
+# ================= SUBCLASSES =================
 class Pulse(Voice):
     def __init__(self, freq, duty=0.5, adsr=None):
         super().__init__(freq, adsr=adsr)
@@ -58,9 +65,8 @@ class Triangle(Voice):
         self.phase += self.freq * dt
         if self.phase >= 1:
             self.phase -= 1
-        return 4 * abs(self.phase - 0.5) - 1
+        return 4.0 * abs(self.phase - 0.5) - 1.0
 
 class Noise(Voice):
-    import random
     def _wave(self, dt):
-        return 2 * (self.random.random() - 0.5)
+        return 2.0 * (random.random() - 0.5)
